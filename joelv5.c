@@ -3,6 +3,7 @@
 #include <string.h>
 #include <math.h>
 #include <stdbool.h>
+#include <stdlib.h>
 #include "library.h"
 #include "wiringPi.h"
 #include <signal.h>
@@ -18,16 +19,14 @@
 #define Col5Lo 0xFD
 #define Col4Lo 0xFE
 
-#define AUDIOFILE "/tmp/shootingstars.raw"
+#define AUDIOFILE "/tmp/jingle.raw"
+#define CSVFILE "/tmp/tickets.csv"
 
 unsigned char ScanCode;		
 
 int open_bar[4] = {0x08, 0x04, 0x02, 0x01};
 int close_bar[4] = {0x01, 0x02, 0x04, 0x08};
 int NumSteps = 100;
-
-int ActiveTickets[10];
-int ticketcount=0;
 
 const unsigned char Bin2LED[] =
 {
@@ -44,6 +43,32 @@ const unsigned char ScanTable[12] =
     0xBB, 0xDB, 0x77, 0xD7
 };
 
+// // Custom characters for car animation
+// const unsigned char car_chars[8][8] = {
+//     // Character 0: Car body (left part)
+//     {0x00, 0x0F, 0x1F, 0x1B, 0x1F, 0x0F, 0x00, 0x00},
+    
+//     // Character 1: Car body (right part) 
+//     {0x00, 0x1E, 0x1F, 0x1B, 0x1F, 0x1E, 0x00, 0x00},
+    
+//     // Character 2: Trail particle (large)
+//     {0x00, 0x00, 0x0E, 0x1F, 0x1F, 0x0E, 0x00, 0x00},
+    
+//     // Character 3: Trail particle (medium)
+//     {0x00, 0x00, 0x00, 0x0E, 0x0E, 0x00, 0x00, 0x00},
+    
+//     // Character 4: Trail particle (small)
+//     {0x00, 0x00, 0x00, 0x04, 0x04, 0x00, 0x00, 0x00},
+    
+//     // Character 5: Empty space
+//     {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
+    
+//     // Character 6: Car body (full single char - for tight spaces)
+//     {0x00, 0x0F, 0x1F, 0x1B, 0x1F, 0x0F, 0x00, 0x00},
+    
+//     // Character 7: Road/ground
+//     {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1F, 0x00}
+// };
 // Custom characters for car animation
 const unsigned char car_chars[8][8] = {
     // Character 0: Car body (left part)
@@ -64,8 +89,8 @@ const unsigned char car_chars[8][8] = {
     // Character 5: Empty space
     {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
     
-    // Character 6: Car body (full single char - for tight spaces)
-    {0x00, 0x0F, 0x1F, 0x1B, 0x1F, 0x0F, 0x00, 0x00},
+    // Character 6: Car (improved design)
+    {0x00, 0x04, 0x0E, 0x1F, 0x1B, 0x1F, 0x0A, 0x00},
     
     // Character 7: Road/ground
     {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1F, 0x00}
@@ -82,6 +107,10 @@ static void create_custom_chars();
 static void animate_car_entering();
 static void animate_car_exiting();
 static void clear_animation_line();
+static void write_ticket_to_csv(int ticket, char* action);
+static void delete_ticket_from_csv(int ticket);
+static int find_ticket_in_csv(int ticket);
+static int get_ticket_input();
 
 static char detect();
 static void buttonOne();
@@ -176,16 +205,7 @@ static void buttonOne(){
 
     srand(time(NULL));
     int ticketNum = rand() % 900000 + 100000;
-	ticketcount++;
-	// if (ticketcount!=10){
-	// 	ActiveTickets[ticketcount]=ticketNum;
-	// }else{
-	// 	initlcd();
-	// 	lcd_writecmd(0x80);
-	// 	LCDprint("Sorry, we are full");
-	// 	return;
-	// }
-
+	
 	time_t now = time(NULL);
 	struct tm *lt = localtime(&now);
 	char buf[9];
@@ -194,8 +214,11 @@ static void buttonOne(){
 		strftime(buf,sizeof buf, "%H:%M:%S", lt);
 	}
 
-    snprintf(line1, sizeof(line1), "Ticket: %05d", ticketNum);
+    snprintf(line1, sizeof(line1), "Ticket: %06d", ticketNum);
     snprintf(line2, sizeof(line2), "Time: %s",buf);
+	
+	// Write ticket to CSV
+	write_ticket_to_csv(ticketNum, "ENTRY");
 	
 	buzz();
 
@@ -205,9 +228,6 @@ static void buttonOne(){
     lcd_writecmd(0xC0);
     LCDprint(line2);
 	usleep(2000000); // Show ticket info for 2 seconds
-
-	
-	
 
 	// Open barrier
 	for(j = NumSteps; j > 0; j--)
@@ -257,20 +277,33 @@ static void buttonTwo(){
 	usleep(100000);
     lcd_writecmd(0x01);
     lcd_writecmd(0x80);
-    LCDprint("# : Payment");
+    LCDprint("Enter ticket:");
 	lcd_writecmd(0xC0);
-    LCDprint("* : Back ");
+    LCDprint("# to confirm");
 
-	while (1)
-	{
-		unsigned char key = detect();
-		if(key == 'B'){
-			break;
-		}
-
-		if(key != 0){
-			lcddata('*');
-		}
+	int enteredTicket = get_ticket_input();
+	
+	if(enteredTicket == -1){
+		// User cancelled
+		return;
+	}
+	
+	// Check if ticket exists in CSV file
+	if(find_ticket_in_csv(enteredTicket)){
+		// Delete ticket from CSV after payment
+		delete_ticket_from_csv(enteredTicket);
+		
+		lcd_writecmd(0x01);
+		lcd_writecmd(0x80);
+		LCDprint("Payment received");
+		lcd_writecmd(0xC0);
+		LCDprint("Ticket deleted");
+		usleep(2000000);
+	} else {
+		lcd_writecmd(0x01);
+		lcd_writecmd(0x80);
+		LCDprint("Ticket not found");
+		usleep(2000000);
 	}
 }
 
@@ -421,7 +454,6 @@ static void create_custom_chars(){
     
     // Return to DDRAM
     lcd_writecmd(0x80);
-	lcddata(6);
 }
 
 // Animation for car entering (left to right)
@@ -527,6 +559,123 @@ static void clear_animation_line(){
     lcd_writecmd(0xC0); // Move to second line
     for(int i = 0; i < 16; i++){
         lcddata(' ');
+    }
+}
+
+// Function to find ticket in CSV file
+static int find_ticket_in_csv(int ticket){
+    FILE *file = fopen(CSVFILE, "r");
+    if(file == NULL){
+        return 0; // File doesn't exist, ticket not found
+    }
+    
+    char line[100];
+    int found_ticket;
+    char action[20];
+    
+    while(fgets(line, sizeof(line), file)){
+        if(sscanf(line, "%d,%s", &found_ticket, action) == 2){
+            if(found_ticket == ticket && strcmp(action, "ENTRY") == 0){
+                fclose(file);
+                return 1; // Ticket found and is active (ENTRY status)
+            }
+        }
+    }
+    
+    fclose(file);
+    return 0; // Ticket not found
+}
+
+// Function to delete ticket from CSV file
+static void delete_ticket_from_csv(int ticket){
+    FILE *file = fopen(CSVFILE, "r");
+    if(file == NULL){
+        return;
+    }
+    
+    FILE *temp = fopen("/tmp/temp_tickets.csv", "w");
+    if(temp == NULL){
+        fclose(file);
+        return;
+    }
+    
+    char line[100];
+    int found_ticket;
+    char action[20];
+    char timestamp[30];
+    
+    while(fgets(line, sizeof(line), file)){
+        if(sscanf(line, "%d,%[^,],%s", &found_ticket, action, timestamp) == 3){
+            // Keep all lines except the ticket we want to delete
+            if(!(found_ticket == ticket && strcmp(action, "ENTRY") == 0)){
+                fputs(line, temp);
+            }
+        }
+    }
+    
+    fclose(file);
+    fclose(temp);
+    
+    // Replace original file with temp file
+    system("mv /tmp/temp_tickets.csv " CSVFILE);
+}
+static void write_ticket_to_csv(int ticket, char* action){
+    FILE *file = fopen(CSVFILE, "a");
+    if(file == NULL){
+        return; // Fail silently
+    }
+    
+    time_t now = time(NULL);
+    struct tm *lt = localtime(&now);
+    char timestamp[20];
+    
+    if(lt){
+        strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", lt);
+    }
+    
+    fprintf(file, "%06d,%s,%s\n", ticket, action, timestamp);
+    fclose(file);
+}
+
+// Function to get 6-digit ticket input from keypad
+static int get_ticket_input(){
+    char input_str[7] = {0};
+    int digit_count = 0;
+    unsigned char key;
+    
+    lcd_writecmd(0xC0);
+    LCDprint("      "); // Clear line
+    lcd_writecmd(0xC0);
+    
+    while(digit_count < 6){
+        key = detect();
+        
+        if(key >= '0' && key <= '9'){
+            input_str[digit_count] = key;
+            lcddata(key);
+            digit_count++;
+        }
+        else if(key == 'A' && digit_count > 0){
+            digit_count--;
+            input_str[digit_count] = '\0';
+            lcd_writecmd(0xC0 + digit_count);
+            lcddata(' ');
+            lcd_writecmd(0xC0 + digit_count);
+        }
+        else if(key == 'B'){
+            return -1; // Cancel
+        }
+    }
+    
+    // Wait for confirmation with #
+    while(1){
+        key = detect();
+        if(key == 'B'){
+            return atoi(input_str);
+        }
+        else if(key == 'A'){
+            return -1; // Cancel
+        }
     }
 }
 

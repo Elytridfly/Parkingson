@@ -18,7 +18,7 @@
 #define Col5Lo 0xFD
 #define Col4Lo 0xFE
 
-#define AUDIOFILE "/tmp/shootingstars.raw"
+#define AUDIOFILE "/tmp/jingle.raw"
 
 unsigned char ScanCode;		
 
@@ -44,6 +44,32 @@ const unsigned char ScanTable[12] =
     0xBB, 0xDB, 0x77, 0xD7
 };
 
+// // Custom characters for car animation
+// const unsigned char car_chars[8][8] = {
+//     // Character 0: Car body (left part)
+//     {0x00, 0x0F, 0x1F, 0x1B, 0x1F, 0x0F, 0x00, 0x00},
+    
+//     // Character 1: Car body (right part) 
+//     {0x00, 0x1E, 0x1F, 0x1B, 0x1F, 0x1E, 0x00, 0x00},
+    
+//     // Character 2: Trail particle (large)
+//     {0x00, 0x00, 0x0E, 0x1F, 0x1F, 0x0E, 0x00, 0x00},
+    
+//     // Character 3: Trail particle (medium)
+//     {0x00, 0x00, 0x00, 0x0E, 0x0E, 0x00, 0x00, 0x00},
+    
+//     // Character 4: Trail particle (small)
+//     {0x00, 0x00, 0x00, 0x04, 0x04, 0x00, 0x00, 0x00},
+    
+//     // Character 5: Empty space
+//     {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
+    
+//     // Character 6: Car body (full single char - for tight spaces)
+//     {0x00, 0x0F, 0x1F, 0x1B, 0x1F, 0x0F, 0x00, 0x00},
+    
+//     // Character 7: Road/ground
+//     {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1F, 0x00}
+// };
 // Custom characters for car animation
 const unsigned char car_chars[8][8] = {
     // Character 0: Car body (left part)
@@ -64,8 +90,8 @@ const unsigned char car_chars[8][8] = {
     // Character 5: Empty space
     {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
     
-    // Character 6: Car body (full single char - for tight spaces)
-    {0x00, 0x0F, 0x1F, 0x1B, 0x1F, 0x0F, 0x00, 0x00},
+    // Character 6: Car (improved design)
+    {0x00, 0x04, 0x0E, 0x1F, 0x1B, 0x1F, 0x0A, 0x00},
     
     // Character 7: Road/ground
     {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1F, 0x00}
@@ -177,14 +203,14 @@ static void buttonOne(){
     srand(time(NULL));
     int ticketNum = rand() % 900000 + 100000;
 	ticketcount++;
-	// if (ticketcount!=10){
-	// 	ActiveTickets[ticketcount]=ticketNum;
-	// }else{
-	// 	initlcd();
-	// 	lcd_writecmd(0x80);
-	// 	LCDprint("Sorry, we are full");
-	// 	return;
-	// }
+	if (ticketcount!=10){
+		ActiveTickets[ticketcount]=ticketNum;
+	}else{
+		initlcd();
+		lcd_writecmd(0x80);
+		LCDprint("Sorry, we are full");
+		return;
+	}
 
 	time_t now = time(NULL);
 	struct tm *lt = localtime(&now);
@@ -252,6 +278,47 @@ static void buttonOne(){
 	LCDprint("1 : Get Ticket");
 }
 
+// static void buttonTwo(){
+// 	system("DISPLAY=:0.0 pqiv -f /tmp/input.jpg &");
+// 	usleep(100000);
+//     lcd_writecmd(0x01);
+//     lcd_writecmd(0x80);
+//     LCDprint("# : Payment");
+// 	lcd_writecmd(0xC0);
+//     LCDprint("* : Back ");
+
+// 	while (1)
+// 	{
+// 		unsigned char key = detect();
+
+// 		int enteredTicket = enteredTicket+key;
+		
+// 		if(key != 0){
+// 			lcddata('*');
+// 		}
+// 		if(key == 'B'){
+// 			for(int i =0;i<10;i++){
+// 				if (enteredTicket==ActiveTickets[i]){
+// 					break;
+// 				}
+// 			}
+// 			initlcd();
+// 			lcd_writecmd(0x01);
+// 			lcd_writecmd(0x80);
+// 			LCDprint("Ticket not found");
+// 			enteredTicket=0;
+// 			usleep(300000);
+// 			initlcd();
+// 			lcd_writecmd(0x01);
+// 			lcd_writecmd(0x80);
+// 			LCDprint("Please try again");
+// 			lcd_writecmd(0xC0);
+// 			LCDprint("2 : Proceed");
+// 			break;
+// 		}
+
+// 	}
+// }
 static void buttonTwo(){
 	system("DISPLAY=:0.0 pqiv -f /tmp/input.jpg &");
 	usleep(100000);
@@ -261,15 +328,42 @@ static void buttonTwo(){
 	lcd_writecmd(0xC0);
     LCDprint("* : Back ");
 
+	int enteredTicket = 0; // Fixed: initialize properly
+
 	while (1)
 	{
 		unsigned char key = detect();
-		if(key == 'B'){
-			break;
-		}
 
-		if(key != 0){
+		// Build ticket number from digits
+		if(key >= '0' && key <= '9'){
+			enteredTicket = enteredTicket * 10 + (key - '0');
 			lcddata('*');
+		}
+		
+		if(key == 'B'){
+			int found = 0;
+			for(int i = 1; i <= ticketcount; i++){ // Fixed: proper bounds
+				if (enteredTicket == ActiveTickets[i]){
+					found = 1;
+					break;
+				}
+			}
+			
+			if(!found){
+				initlcd();
+				lcd_writecmd(0x01);
+				lcd_writecmd(0x80);
+				LCDprint("Ticket not found");
+				enteredTicket = 0;
+				usleep(300000);
+				initlcd();
+				lcd_writecmd(0x01);
+				lcd_writecmd(0x80);
+				LCDprint("Please try again");
+				lcd_writecmd(0xC0);
+				LCDprint("2 : Proceed");
+			}
+			break;
 		}
 	}
 }
@@ -421,7 +515,7 @@ static void create_custom_chars(){
     
     // Return to DDRAM
     lcd_writecmd(0x80);
-	lcddata(6);
+	// lcddata(6);
 }
 
 // Animation for car entering (left to right)

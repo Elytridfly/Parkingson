@@ -18,7 +18,7 @@
 #define Col5Lo 0xFD
 #define Col4Lo 0xFE
 
-#define AUDIOFILE "/tmp/shootingstars.raw"
+#define AUDIOFILE "/tmp/jingle.raw"
 
 unsigned char ScanCode;		
 
@@ -177,14 +177,14 @@ static void buttonOne(){
     srand(time(NULL));
     int ticketNum = rand() % 900000 + 100000;
 	ticketcount++;
-	// if (ticketcount!=10){
-	// 	ActiveTickets[ticketcount]=ticketNum;
-	// }else{
-	// 	initlcd();
-	// 	lcd_writecmd(0x80);
-	// 	LCDprint("Sorry, we are full");
-	// 	return;
-	// }
+	if (ticketcount!=10){
+		ActiveTickets[ticketcount]=ticketNum;
+	}else{
+		initlcd();
+		lcd_writecmd(0x80);
+		LCDprint("Sorry, we are full");
+		return;
+	}
 
 	time_t now = time(NULL);
 	struct tm *lt = localtime(&now);
@@ -264,13 +264,33 @@ static void buttonTwo(){
 	while (1)
 	{
 		unsigned char key = detect();
-		if(key == 'B'){
-			break;
-		}
 
+		int enteredTicket = enteredTicket+key;
+		
 		if(key != 0){
 			lcddata('*');
 		}
+		if(key == 'B'){
+			for(int i =0;i<10;i++){
+				if (enteredTicket==ActiveTickets[i]){
+					break;
+				}
+			}
+			initlcd();
+			lcd_writecmd(0x01);
+			lcd_writecmd(0x80);
+			LCDprint("Ticket not found");
+			enteredTicket=0;
+			usleep(300000);
+			initlcd();
+			lcd_writecmd(0x01);
+			lcd_writecmd(0x80);
+			LCDprint("Please try again");
+			lcd_writecmd(0xC0);
+			LCDprint("2 : Proceed");
+			break;
+		}
+
 	}
 }
 
@@ -421,7 +441,7 @@ static void create_custom_chars(){
     
     // Return to DDRAM
     lcd_writecmd(0x80);
-	lcddata(6);
+	// lcddata(6);
 }
 
 // Animation for car entering (left to right)
