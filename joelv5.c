@@ -275,11 +275,12 @@ static void buttonOne(){
 static void buttonTwo(){
 	system("DISPLAY=:0.0 pqiv -f /tmp/input.jpg &");
 	usleep(100000);
+	initlcd();
     lcd_writecmd(0x01);
     lcd_writecmd(0x80);
-    LCDprint("Enter ticket:");
+    LCDprint("# : Payment");
 	lcd_writecmd(0xC0);
-    LCDprint("# to confirm");
+    LCDprint("* : Back ");
 
 	int enteredTicket = get_ticket_input();
 	
@@ -299,11 +300,23 @@ static void buttonTwo(){
 		lcd_writecmd(0xC0);
 		LCDprint("Ticket deleted");
 		usleep(2000000);
+		lcd_writecmd(0x01);
+		lcd_writecmd(0x80);
+		LCDprint("#: Open Barricade");
+		
 	} else {
+		initlcd();
 		lcd_writecmd(0x01);
 		lcd_writecmd(0x80);
 		LCDprint("Ticket not found");
-		usleep(2000000);
+		enteredTicket = 0;
+		usleep(300000);
+		initlcd();
+		lcd_writecmd(0x01);
+		lcd_writecmd(0x80);
+		LCDprint("Please try again");
+		lcd_writecmd(0xC0);
+		LCDprint("2 : Proceed");
 	}
 }
 
@@ -566,7 +579,12 @@ static void clear_animation_line(){
 static int find_ticket_in_csv(int ticket){
     FILE *file = fopen(CSVFILE, "r");
     if(file == NULL){
+		// printf("Cannot find");
+		lcd_writecmd(0xC0);
+		//LCDprint("Cant find 1");
+		usleep(2000000);
         return 0; // File doesn't exist, ticket not found
+		
     }
     
     char line[100];
@@ -574,14 +592,16 @@ static int find_ticket_in_csv(int ticket){
     char action[20];
     
     while(fgets(line, sizeof(line), file)){
-        if(sscanf(line, "%d,%s", &found_ticket, action) == 2){
-            if(found_ticket == ticket && strcmp(action, "ENTRY") == 0){
+        if(sscanf(line, "%d", &found_ticket) == 1){
+            if(found_ticket == ticket){
                 fclose(file);
                 return 1; // Ticket found and is active (ENTRY status)
             }
         }
     }
-    
+    // printf("Cannot find 2");
+	//LCDprint("Cant find 2");
+	//usleep(2000000);
     fclose(file);
     return 0; // Ticket not found
 }
@@ -605,9 +625,9 @@ static void delete_ticket_from_csv(int ticket){
     char timestamp[30];
     
     while(fgets(line, sizeof(line), file)){
-        if(sscanf(line, "%d,%[^,],%s", &found_ticket, action, timestamp) == 3){
+        if(sscanf(line, "%d", &found_ticket)==1){
             // Keep all lines except the ticket we want to delete
-            if(!(found_ticket == ticket && strcmp(action, "ENTRY") == 0)){
+            if(!(found_ticket == ticket)){
                 fputs(line, temp);
             }
         }
@@ -643,16 +663,16 @@ static int get_ticket_input(){
     int digit_count = 0;
     unsigned char key;
     
-    lcd_writecmd(0xC0);
-    LCDprint("      "); // Clear line
-    lcd_writecmd(0xC0);
+    // lcd_writecmd(0xC0);
+    // LCDprint("      "); // Clear line
+    // lcd_writecmd(0xC0);
     
     while(digit_count < 6){
         key = detect();
         
         if(key >= '0' && key <= '9'){
             input_str[digit_count] = key;
-            lcddata(key);
+            lcddata('*');
             digit_count++;
         }
         else if(key == 'A' && digit_count > 0){
