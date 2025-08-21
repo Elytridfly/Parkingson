@@ -8,6 +8,8 @@
 #include "wiringPi.h"
 #include <signal.h>
 #include <time.h>
+#include <pthread.h>
+
 
 #define LEDPort 0x3A
 #define KbdPort 0x3C
@@ -21,6 +23,10 @@
 
 #define AUDIOFILE "/tmp/jingle.raw"
 #define CSVFILE "/tmp/tickets.csv"
+
+pthread_t dac_id;
+pthread_mutex_t daclock = PTHREAD_MUTEX_INITIALIZER;  
+volatile bool stop_audio = false;
 
 unsigned char ScanCode;		
 
@@ -43,32 +49,6 @@ const unsigned char ScanTable[12] =
     0xBB, 0xDB, 0x77, 0xD7
 };
 
-// // Custom characters for car animation
-// const unsigned char car_chars[8][8] = {
-//     // Character 0: Car body (left part)
-//     {0x00, 0x0F, 0x1F, 0x1B, 0x1F, 0x0F, 0x00, 0x00},
-    
-//     // Character 1: Car body (right part) 
-//     {0x00, 0x1E, 0x1F, 0x1B, 0x1F, 0x1E, 0x00, 0x00},
-    
-//     // Character 2: Trail particle (large)
-//     {0x00, 0x00, 0x0E, 0x1F, 0x1F, 0x0E, 0x00, 0x00},
-    
-//     // Character 3: Trail particle (medium)
-//     {0x00, 0x00, 0x00, 0x0E, 0x0E, 0x00, 0x00, 0x00},
-    
-//     // Character 4: Trail particle (small)
-//     {0x00, 0x00, 0x00, 0x04, 0x04, 0x00, 0x00, 0x00},
-    
-//     // Character 5: Empty space
-//     {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
-    
-//     // Character 6: Car body (full single char - for tight spaces)
-//     {0x00, 0x0F, 0x1F, 0x1B, 0x1F, 0x0F, 0x00, 0x00},
-    
-//     // Character 7: Road/ground
-//     {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1F, 0x00}
-// };
 // Custom characters for car animation
 const unsigned char car_chars[8][8] = {
     // Character 0: Car body (left part)
@@ -102,7 +82,6 @@ static void initlcd();
 static void lcd_writecmd(char cmd);
 static void LCDprint(char *sptr);
 static void lcddata(unsigned char cmd);
-static void buzz();
 static void create_custom_chars();
 static void animate_car_entering();
 static void animate_car_exiting();
@@ -111,6 +90,9 @@ static void write_ticket_to_csv(int ticket, char* action);
 static void delete_ticket_from_csv(int ticket);
 static int find_ticket_in_csv(int ticket);
 static int get_ticket_input();
+static void start_buzz();
+static void stop_buzz();
+void* buzz(void* arg);
 
 static char detect();
 static void buttonOne();
@@ -130,6 +112,9 @@ int main(int argc, char *argv[])
 	system("killall pqiv");
 	initlcd();
 	create_custom_chars(); // Initialize custom characters
+    int mutex_check_dac;
+	pthread_mutex_lock(&daclock);
+
 	sleep(1);
 
 	if (inOut == 0){
@@ -220,8 +205,10 @@ static void buttonOne(){
 	// Write ticket to CSV
 	write_ticket_to_csv(ticketNum, "ENTRY");
 	
-	buzz();
+	start_buzz();
 
+	system("DISPLAY=:0.0 pqiv -f /tmp/printing.jpg &");
+	usleep(5000);
     lcd_writecmd(0x01);
     lcd_writecmd(0x80);
     LCDprint(line1);
@@ -242,7 +229,6 @@ static void buttonOne(){
 	system("DISPLAY=:0.0 pqiv -f /tmp/enter.jpg &");
 	usleep(5000);
 	CM3_outport(LEDPort,Bin2LED[8]);
-	// Clear screen and show car entering animation
 	lcd_writecmd(0x01);
 	lcd_writecmd(0x80);
 	LCDprint("Car Entering...");
@@ -285,13 +271,9 @@ static void buttonTwo(){
 	int enteredTicket = get_ticket_input();
 	
 	if(enteredTicket == -1){
-		// User cancelled
 		return;
 	}
-	
-	// Check if ticket exists in CSV file
 	if(find_ticket_in_csv(enteredTicket)){
-		// Delete ticket from CSV after payment
 		delete_ticket_from_csv(enteredTicket);
 		
 		lcd_writecmd(0x01);
@@ -302,6 +284,7 @@ static void buttonTwo(){
 		usleep(2000000);
 		lcd_writecmd(0x01);
 		lcd_writecmd(0x80);
+		system("DISPLAY=:0.0 pqiv -f /tmp/process.jpg &");		
 		LCDprint("#: Open Barricade");
 		
 	} else {
@@ -401,6 +384,7 @@ static void buttonHex(){
 	CM3_outport(LEDPort,Bin2LED[16]);
 
 	if (inOut == 0){
+		system("killall pqiv");
 		system("DISPLAY=:0.0 pqiv -f /tmp/entry.jpg &");		
 		sleep(2);	
 		initlcd();
@@ -413,6 +397,7 @@ static void buttonHex(){
 	}
 
 	if (inOut == 1){
+		system("killall pqiv");
 		system("DISPLAY=:0.0 pqiv -f /tmp/exit.jpg &");		
 		sleep(2);
 		initlcd();
@@ -428,6 +413,7 @@ static void buttonHex(){
 static void buttonStar(){
 	if (inOut == 0){
 		inOut = 1;
+		system("killall pqiv");
 		system("DISPLAY=:0.0 pqiv -f /tmp/exit.jpg &");		
 		sleep(2);	
 		initlcd();
@@ -440,6 +426,7 @@ static void buttonStar(){
 	}
 	else if (inOut == 1){
 		inOut = 0;
+		system("killall pqiv");
 		system("DISPLAY=:0.0 pqiv -f /tmp/entry.jpg &");		
 		sleep(2);
 		initlcd();
@@ -457,17 +444,13 @@ static void create_custom_chars(){
     int i, j;
     
     for(i = 0; i < 8; i++){
-        // Set CGRAM address (0x40 + character_number * 8)
         lcd_writecmd(0x40 + (i * 8));
         
-        // Write 8 bytes for each custom character
         for(j = 0; j < 8; j++){
             lcddata(car_chars[i][j]);
         }
 		usleep(10000);
     }
-    
-    // Return to DDRAM
     lcd_writecmd(0x80);
 }
 
@@ -475,31 +458,19 @@ static void create_custom_chars(){
 static void animate_car_entering(){
     int pos;
     
-    // Move to second line for animation
     lcd_writecmd(0xC0);
     
-    // Clear the line first
     for(int i = 0; i < 16; i++){
         lcddata(' ');
     }
     
-    // Animate car moving from left to right
     for(pos = 0; pos < 14; pos++){
-        // Move cursor to animation line
         lcd_writecmd(0xC0);
-        
-        // Clear previous frame
         for(int i = 0; i < 16; i++){
             lcddata(' ');
         }
-        
-        // Move cursor to current car position
         lcd_writecmd(0xC0 + pos);
-        
-        // Draw car (using custom character 6 for single character car)
         lcddata(6); // Custom character 6 (car)
-        
-        // Draw trail particles behind the car
         if(pos > 0){
             lcd_writecmd(0xC0 + pos - 1);
             lcddata(2); // Large particle
@@ -516,7 +487,6 @@ static void animate_car_entering(){
         usleep(50000); // Delay for animation speed
     }
     
-    // Clear animation line
     clear_animation_line();
 }
 
@@ -524,31 +494,19 @@ static void animate_car_entering(){
 static void animate_car_exiting(){
     int pos;
     
-    // Move to second line for animation
     lcd_writecmd(0xC0);
     
-    // Clear the line first
     for(int i = 0; i < 16; i++){
         lcddata(' ');
     }
     
-    // Animate car moving from right to left
     for(pos = 15; pos >= 1; pos--){
-        // Move cursor to animation line
         lcd_writecmd(0xC0);
-        
-        // Clear previous frame
         for(int i = 0; i < 16; i++){
             lcddata(' ');
         }
-        
-        // Move cursor to current car position
         lcd_writecmd(0xC0 + pos);
-        
-        // Draw car (using custom character 6)
         lcddata(6); // Custom character 6 (car)
-        
-        // Draw trail particles ahead of the car (since it's moving left)
         if(pos < 15){
             lcd_writecmd(0xC0 + pos + 1);
             lcddata(2); // Large particle
@@ -565,7 +523,6 @@ static void animate_car_exiting(){
         usleep(50000); // Delay for animation speed
     }
     
-    // Clear animation line
     clear_animation_line();
 }
 
@@ -581,9 +538,7 @@ static void clear_animation_line(){
 static int find_ticket_in_csv(int ticket){
     FILE *file = fopen(CSVFILE, "r");
     if(file == NULL){
-		// printf("Cannot find");
 		lcd_writecmd(0xC0);
-		//LCDprint("Cant find 1");
 		usleep(2000000);
         return 0; // File doesn't exist, ticket not found
 		
@@ -601,9 +556,6 @@ static int find_ticket_in_csv(int ticket){
             }
         }
     }
-    // printf("Cannot find 2");
-	//LCDprint("Cant find 2");
-	//usleep(2000000);
     fclose(file);
     return 0; // Ticket not found
 }
@@ -628,7 +580,6 @@ static void delete_ticket_from_csv(int ticket){
     
     while(fgets(line, sizeof(line), file)){
         if(sscanf(line, "%d", &found_ticket)==1){
-            // Keep all lines except the ticket we want to delete
             if(!(found_ticket == ticket)){
                 fputs(line, temp);
             }
@@ -638,9 +589,9 @@ static void delete_ticket_from_csv(int ticket){
     fclose(file);
     fclose(temp);
     
-    // Replace original file with temp file
     system("mv /tmp/temp_tickets.csv " CSVFILE);
 }
+
 static void write_ticket_to_csv(int ticket, char* action){
     FILE *file = fopen(CSVFILE, "a");
     if(file == NULL){
@@ -665,10 +616,6 @@ static int get_ticket_input(){
     int digit_count = 0;
     unsigned char key;
     
-    // lcd_writecmd(0xC0);
-    // LCDprint("      "); // Clear line
-    // lcd_writecmd(0xC0);
-    
     while(digit_count < 6){
         key = detect();
         
@@ -689,7 +636,6 @@ static int get_ticket_input(){
         }
     }
     
-    // Wait for confirmation with #
     while(1){
         key = detect();
         if(key == 'B'){
@@ -699,6 +645,51 @@ static int get_ticket_input(){
             return -1; // Cancel
         }
     }
+}
+
+void* buzz(void* arg)
+{
+    dac_id = pthread_self();
+    unsigned char buffer[1];
+    int fileend;
+    FILE *ptr;
+    
+    pthread_mutex_lock(&daclock);
+    stop_audio = false;
+
+    CM3DeviceInit();
+    CM3PortInit(5);
+
+    ptr = fopen(AUDIOFILE, "rb");
+    if (ptr == NULL) {
+        perror(AUDIOFILE);
+        printf("File cannot be found\n");
+        pthread_mutex_unlock(&daclock);
+        return NULL;
+    }
+
+    while ((fileend = fgetc(ptr)) != EOF && !stop_audio) {
+        if (fread(buffer, sizeof(buffer), 1, ptr) > 0) {
+            CM3PortWrite(3, buffer[0]);
+        }
+    }
+
+    fclose(ptr);
+    pthread_mutex_unlock(&daclock);
+    return NULL;
+}
+
+static void start_buzz()
+{
+    if (pthread_create(&dac_id, NULL, buzz, NULL) != 0) {
+        perror("Failed to create buzz thread");
+    }
+}
+
+static void stop_buzz()
+{
+    stop_audio = true;
+    pthread_join(dac_id, NULL);
 }
 
 static void initlcd(void)
@@ -826,35 +817,4 @@ unsigned char ProcKey()
 	}
 
 	return (0);
-}
-
-void buzz(void)
-{
-    unsigned char data[2];
-    float gain = 255.0f;
-    float phase = 0.0f;
-    float bias = 255.0f;
-    float freq = 2.0f * 3.14159f / 4.0f;
-    unsigned char buffer[1];
-    int fileend;
-    FILE *ptr;
-
-    CM3DeviceInit();
-    CM3PortInit(5);
-
-    ptr = fopen(AUDIOFILE, "rb");
-    if (ptr == NULL) {
-        perror(AUDIOFILE);
-        printf("File cannot be found\n");
-        return;
-    }
-
-    while ((fileend = fgetc(ptr)) != EOF) {
-        fread(buffer, sizeof(buffer), 2, ptr);
-        for (int i = 0; i < 1; i++) {
-            CM3PortWrite(3, buffer[i]);
-        }
-    }
-
-    fclose(ptr);
 }
